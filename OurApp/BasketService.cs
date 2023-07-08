@@ -1,68 +1,74 @@
 ﻿using System;
+using OurApp.DiscountProviders;
+using OurApp.Services;
+using OurApp.Storages;
 
 namespace OurApp
 {
     public class BasketService
     {
-        public Basket GetBasketForCustomer(Guid customrId)
+        private readonly IBasketDataConnector _basketDataConnector;
+        private readonly ICustomerRepository _customerRepository;
+        private readonly IProductService _productService;
+        private readonly DiscountProviderFactory _discountProviderFactory;
+
+        public BasketService(
+            IBasketDataConnector basketDataConnector,
+            ICustomerRepository customerRepository,
+            IProductService productService,
+            DiscountProviderFactory discountProviderFactory)
         {
-            Basket basket = BasketsDataConnector.GetCustomerBasket(customrId);
+            _basketDataConnector = basketDataConnector;
+            _customerRepository = customerRepository;
+            _productService = productService;
+            _discountProviderFactory = discountProviderFactory;
+        }
 
-            if (basket != null)
-                return basket;
-                
-            var customerRepository = new CustomerRepository();
-            Customer customer = customerRepository.GetById(customrId);
+        public BasketService() : this(
+            new BasketDataConnectorAdapter(),
+            new CustomerRepositoryAdapter(new CustomerRepository()), 
+            new ProductServiceAdapter(new ProductService()),
+            new DiscountProviderFactory(new DataTimeProvider()))
+        {
+        }
 
-            if (customer == null)
-                throw new Exception("Customer doesnt exists!");
+        public Basket GetBasketForCustomer(Guid customrId) => 
+            _basketDataConnector.GetCustomerBasket(customrId) ?? CreateBasketForCustomer(customrId);
 
-            decimal discount = 0m;
-            var now = DateTime.Now;
-            var registeredForDays = (now - customer.RegisteredAt).TotalDays;
+        private Basket CreateBasketForCustomer(Guid customerId)
+        {
+            var customer = _customerRepository.GetById(customerId) ?? throw new Exception("Customer doesnt exists!");
             
-            if (customer.CustomerType == "regular")
-            {
-                if (registeredForDays > 365)
-                    discount = 0.2m;
-                else
-                    discount = 0.1m;
-            } else if (customer.CustomerType == "special")
-            {
-                discount = 0.25m;
-            }
-            
-            basket = new Basket()
+            var discount = _discountProviderFactory.Get(customer.CustomerType).GetDiscount(customer);
+
+            var basket = new Basket
             {
                 Id = Guid.NewGuid(),
                 Customer = customer,
                 CreatedAt = DateTime.Now,
                 Discount = discount
             };
-            
-            BasketsDataConnector.AddBasket(basket);
+
+            _basketDataConnector.AddBasket(basket);
 
             return basket;
         }
 
         public bool AddProductToBasket(Guid basketId, Guid produtId)
         {
-            Basket basket = BasketsDataConnector.GetBasket(basketId);
+            var basket = _basketDataConnector.GetBasket(basketId);
 
             if (basket == null)
                 return false;
             
-            var productService = new ProductService();
-            var product = productService.GetById(produtId);
+            var product = _productService.GetById(produtId);
 
             if (product == null)
                 return false;
 
             basket.Products.Add(product);
-
-            var result = BasketsDataConnector.Update(basket.Id, basket);
-
-            return result;
+            
+            return _basketDataConnector.Update(basket.Id, basket);
         }
     }
 }
